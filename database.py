@@ -5,17 +5,22 @@ from cryptography.fernet import Fernet
 import os
 import json
 
-# Render Persistence Setup - Create data directory if it doesn't exist
-# This handles both local development and Render deployment
-DATA_DIR = Path('/opt/render/project/data') if os.environ.get('RENDER') else Path(__file__).parent
+# ==================== RENDER PERSISTENCE SETUP ====================
+# Detect if running on Render
+IS_RENDER = bool(os.environ.get('RENDER'))
 
-# Ensure data directory exists on Render
-if os.environ.get('RENDER'):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+if IS_RENDER:
+    DATA_DIR = Path('/opt/render/project/data')
+else:
+    DATA_DIR = Path(__file__).parent
+
+# Create data directory if it doesn't exist
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / 'users.db'
 ENCRYPTION_KEY_FILE = DATA_DIR / '.encryption_key'
 
+# ==================== ENCRYPTION SETUP ====================
 def get_encryption_key():
     """Get or create encryption key for cookie storage"""
     if ENCRYPTION_KEY_FILE.exists():
@@ -26,17 +31,17 @@ def get_encryption_key():
         try:
             with open(ENCRYPTION_KEY_FILE, 'wb') as f:
                 f.write(key)
+            print(f"Encryption key created at {ENCRYPTION_KEY_FILE}")
         except Exception as e:
             print(f"Warning: Could not save encryption key: {e}")
-            # Fallback to a deterministic key if we can't save
-            key = Fernet.generate_key()
         return key
 
 ENCRYPTION_KEY = get_encryption_key()
 cipher_suite = Fernet(ENCRYPTION_KEY)
 
+# ==================== DATABASE INITIALIZATION ====================
 def init_db():
-    """Initialize database with tables"""
+    """Initialize database with all tables"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -51,7 +56,7 @@ def init_db():
             )
         ''')
         
-        # User configs table
+        # User configs table - Complete with all columns
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +70,8 @@ def init_db():
                 locked_group_name TEXT,
                 locked_nicknames TEXT,
                 lock_enabled INTEGER DEFAULT 0,
+                admin_thread_id TEXT,
+                admin_chat_type TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
@@ -76,24 +83,28 @@ def init_db():
             ('automation_running', 'INTEGER DEFAULT 0'),
             ('locked_group_name', 'TEXT'),
             ('locked_nicknames', 'TEXT'),
-            ('lock_enabled', 'INTEGER DEFAULT 0')
+            ('lock_enabled', 'INTEGER DEFAULT 0'),
+            ('admin_thread_id', 'TEXT'),
+            ('admin_chat_type', 'TEXT')
         ]
         
         for col_name, col_type in columns_to_add:
             try:
                 cursor.execute(f'ALTER TABLE user_configs ADD COLUMN {col_name} {col_type}')
                 conn.commit()
+                print(f"Added column: {col_name}")
             except sqlite3.OperationalError:
                 pass  # Column already exists
         
         conn.commit()
         conn.close()
-        print(f"Database initialized successfully at {DB_PATH}")
+        print(f"✓ Database initialized successfully at {DB_PATH}")
         return True
     except Exception as e:
-        print(f"Database initialization error: {e}")
+        print(f"✗ Database initialization error: {e}")
         return False
 
+# ==================== HELPER FUNCTIONS ====================
 def hash_password(password):
     """Hash password using SHA-256"""
     return hashlib.sha256(password.encode()).hexdigest()
@@ -102,7 +113,11 @@ def encrypt_cookies(cookies):
     """Encrypt cookies for secure storage"""
     if not cookies:
         return None
-    return cipher_suite.encrypt(cookies.encode()).decode()
+    try:
+        return cipher_suite.encrypt(cookies.encode()).decode()
+    except Exception as e:
+        print(f"Encryption error: {e}")
+        return None
 
 def decrypt_cookies(encrypted_cookies):
     """Decrypt cookies"""
@@ -114,6 +129,7 @@ def decrypt_cookies(encrypted_cookies):
         print(f"Decryption error: {e}")
         return ""
 
+# ==================== USER MANAGEMENT ====================
 def create_user(username, password):
     """Create new user"""
     conn = sqlite3.connect(DB_PATH)
@@ -153,6 +169,18 @@ def verify_user(username, password):
         return user[0]
     return None
 
+def get_username(user_id):
+    """Get username by user ID"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT username FROM users WHERE id = ?', (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    
+    return user[0] if user else None
+
+# ==================== CONFIGURATION MANAGEMENT ====================
 def get_user_config(user_id):
     """Get user configuration"""
     conn = sqlite3.connect(DB_PATH)
@@ -194,17 +222,7 @@ def update_user_config(user_id, chat_id, name_prefix, delay, cookies, messages):
     conn.commit()
     conn.close()
 
-def get_username(user_id):
-    """Get username by user ID"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT username FROM users WHERE id = ?', (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    
-    return user[0] if user else None
-
+# ==================== AUTOMATION STATUS ====================
 def set_automation_running(user_id, is_running):
     """Set automation running state for a user"""
     conn = sqlite3.connect(DB_PATH)
@@ -230,6 +248,7 @@ def get_automation_running(user_id):
     
     return bool(result[0]) if result else False
 
+# ==================== LOCK SYSTEM ====================
 def get_lock_config(user_id):
     """Get lock configuration for a user"""
     conn = sqlite3.connect(DB_PATH)
@@ -308,5 +327,62 @@ def get_lock_enabled(user_id):
     
     return bool(result[0]) if result else False
 
+# ==================== ADMIN THREAD MANAGEMENT ====================
+def get_admin_e2ee_thread_id(user_id):
+    """Get admin thread ID for a user"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT admin_thread_id, admin_chat_type FROM user_configs WHERE user_id = ?', (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    
+    if res:
+        return {'thread_id': res[0], 'chat_type': res[1]}
+    return None
+
+def set_admin_e2ee_thread_id(user_id, thread_id, cookies, chat_type):
+    """Set admin thread configuration"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    encrypted_cookies = encrypt_cookies(cookies)
+    
+    cursor.execute('''
+        UPDATE user_configs 
+        SET admin_thread_id = ?, admin_chat_type = ?, cookies_encrypted = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    ''', (thread_id, chat_type, encrypted_cookies, user_id))
+    
+    conn.commit()
+    conn.close()
+
+# ==================== DATABASE STATUS CHECK ====================
+def check_database_status():
+    """Check if database is accessible and has tables"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            print(f"✓ Database is healthy at {DB_PATH}")
+            return True
+        else:
+            print(f"✗ Database exists but missing tables at {DB_PATH}")
+            return False
+    except Exception as e:
+        print(f"✗ Database error: {e}")
+        return False
+
+# ==================== INITIALIZATION ====================
 # Initialize database when module loads
 init_db()
+check_database_status()
+
+print(f"✓ Module loaded successfully")
+print(f"  Data Directory: {DATA_DIR}")
+print(f"  Database Path: {DB_PATH}")
+print(f"  Running on Render: {IS_RENDER}")
