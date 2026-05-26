@@ -16,6 +16,10 @@ from selenium.webdriver.chrome.options import Options
 import database as db
 import requests
 
+# Render-compatible webdriver manager import
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+
 st.set_page_config(
     page_title="Ashiq Raj",
     page_icon="🔵",
@@ -497,60 +501,24 @@ def find_message_input(driver, process_id, automation_state=None):
     return None
 
 def setup_browser(automation_state=None):
-    log_message('Setting up Chrome browser...', automation_state)
-    
+    log_message('Setting up Chrome browser for Render...', automation_state)
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     
-    chromium_paths = [
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/google-chrome',
-        '/usr/bin/chrome'
-    ]
-    
-    for chromium_path in chromium_paths:
-        if Path(chromium_path).exists():
-            chrome_options.binary_location = chromium_path
-            log_message(f'Found Chromium at: {chromium_path}', automation_state)
-            break
-    
-    chromedriver_paths = [
-        '/usr/bin/chromedriver',
-        '/usr/local/bin/chromedriver'
-    ]
-    
-    driver_path = None
-    for driver_candidate in chromedriver_paths:
-        if Path(driver_candidate).exists():
-            driver_path = driver_candidate
-            log_message(f'Found ChromeDriver at: {driver_path}', automation_state)
-            break
+    # Set Chromium binary location for Render (adjust if needed)
+    chrome_options.binary_location = "/usr/bin/chromium"
     
     try:
-        from selenium.webdriver.chrome.service import Service
-        
-        if driver_path:
-            service = Service(executable_path=driver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            log_message('Chrome started with detected ChromeDriver!', automation_state)
-        else:
-            driver = webdriver.Chrome(options=chrome_options)
-            log_message('Chrome started with default driver!', automation_state)
-        
-        driver.set_window_size(1920, 1080)
+        # WebDriver Manager will automatically download and use correct driver
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         log_message('Chrome browser setup completed successfully!', automation_state)
         return driver
-    except Exception as error:
-        log_message(f'Browser setup failed: {error}', automation_state)
-        raise error
+    except Exception as e:
+        log_message(f'Browser setup failed: {e}', automation_state)
+        raise e
 
 def get_next_message(messages, automation_state=None):
     if not messages or len(messages) == 0:
