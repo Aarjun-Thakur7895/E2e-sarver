@@ -1,11 +1,5 @@
-# Database and Security
-cryptography==42.0.5
-requests==2.31.0
-
-# Browser Automation (Agar aap msg bhejne ke liye inka use kar rahe hain)
+streamlit==1.32.0
 selenium==4.18.1
 webdriver-manager==4.0.1
-
-# Web Framework (Agar aap UI/Bot chalane ke liye Flask/FastAPI use kar rahe hain)
-flask==3.0.2
-gunicorn==21.2.0
+cryptography==42.0.5
+requests==2.31.0
