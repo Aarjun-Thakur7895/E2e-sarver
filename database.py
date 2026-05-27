@@ -97,6 +97,16 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
+        # Admin configs table for E2EE thread storage
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admin_configs (
+                user_id INTEGER PRIMARY KEY,
+                thread_id TEXT,
+                cookies TEXT,
+                chat_type TEXT
+            )
+        ''')
+
         conn.commit()
         conn.close()
         print(f"Database initialized successfully at {DB_PATH}")
@@ -330,6 +340,29 @@ def get_lock_enabled(user_id):
     conn.close()
 
     return bool(result[0]) if result else False
+
+# ------------------------------------------------------------
+# Admin E2EE thread management
+# ------------------------------------------------------------
+def get_admin_e2ee_thread_id(user_id):
+    """Get stored thread_id for admin user"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT thread_id FROM admin_configs WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def set_admin_e2ee_thread_id(user_id, thread_id, cookies, chat_type):
+    """Store or update thread_id, cookies and chat_type for admin user"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO admin_configs (user_id, thread_id, cookies, chat_type)
+        VALUES (?, ?, ?, ?)
+    ''', (user_id, thread_id, cookies, chat_type))
+    conn.commit()
+    conn.close()
 
 # ------------------------------------------------------------
 # Initialize database when module loads
