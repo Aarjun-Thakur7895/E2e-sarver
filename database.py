@@ -1,299 +1,166 @@
 import sqlite3
 import hashlib
-from pathlib import Path
-from cryptography.fernet import Fernet
 import os
+from datetime import datetime
 
-DB_PATH = Path(__file__).parent / 'users.db'
-ENCRYPTION_KEY_FILE = Path(__file__).parent / '.encryption_key'
-
-def get_encryption_key():
-    """Get or create encryption key for cookie storage"""
-    if ENCRYPTION_KEY_FILE.exists():
-        with open(ENCRYPTION_KEY_FILE, 'rb') as f:
-            return f.read()
-    else:
-        key = Fernet.generate_key()
-        with open(ENCRYPTION_KEY_FILE, 'wb') as f:
-            f.write(key)
-        return key
-
-ENCRYPTION_KEY = get_encryption_key()
-cipher_suite = Fernet(ENCRYPTION_KEY)
+DB_PATH = os.path.join(os.path.dirname(__file__), 'data', 'users.db')
 
 def init_db():
-    """Initialize database with tables"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    # Users table
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  username TEXT UNIQUE,
+                  password TEXT,
+                  created_at TIMESTAMP)''')
     
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_configs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            chat_id TEXT,
-            name_prefix TEXT,
-            delay INTEGER DEFAULT 30,
-            cookies_encrypted TEXT,
-            messages TEXT,
-            automation_running INTEGER DEFAULT 0,
-            locked_group_name TEXT,
-            locked_nicknames TEXT,
-            lock_enabled INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    ''')
-    
-    try:
-        cursor.execute('ALTER TABLE user_configs ADD COLUMN automation_running INTEGER DEFAULT 0')
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    
-    try:
-        cursor.execute('ALTER TABLE user_configs ADD COLUMN locked_group_name TEXT')
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    
-    try:
-        cursor.execute('ALTER TABLE user_configs ADD COLUMN locked_nicknames TEXT')
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    
-    try:
-        cursor.execute('ALTER TABLE user_configs ADD COLUMN lock_enabled INTEGER DEFAULT 0')
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
+    # User configs table
+    c.execute('''CREATE TABLE IF NOT EXISTS user_configs
+                 (user_id INTEGER PRIMARY KEY,
+                  chat_id TEXT,
+                  name_prefix TEXT,
+                  delay INTEGER DEFAULT 5,
+                  cookies TEXT,
+                  messages TEXT,
+                  automation_running INTEGER DEFAULT 0,
+                  admin_e2ee_thread_id TEXT,
+                  admin_thread_type TEXT,
+                  updated_at TIMESTAMP,
+                  FOREIGN KEY (user_id) REFERENCES users (id))''')
     
     conn.commit()
     conn.close()
 
 def hash_password(password):
-    """Hash password using SHA-256"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-def encrypt_cookies(cookies):
-    """Encrypt cookies for secure storage"""
-    if not cookies:
-        return None
-    return cipher_suite.encrypt(cookies.encode()).decode()
-
-def decrypt_cookies(encrypted_cookies):
-    """Decrypt cookies"""
-    if not encrypted_cookies:
-        return ""
-    try:
-        return cipher_suite.decrypt(encrypted_cookies.encode()).decode()
-    except:
-        return ""
-
 def create_user(username, password):
-    """Create new user"""
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
     try:
-        password_hash = hash_password(password)
-        cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', 
-                      (username, password_hash))
-        user_id = cursor.lastrowid
+        hashed = hash_password(password)
+        c.execute("INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)",
+                 (username, hashed, datetime.now()))
+        user_id = c.lastrowid
         
-        cursor.execute('''
-            INSERT INTO user_configs (user_id, chat_id, name_prefix, delay, messages)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, '', '', 30, ''))
+        # Create default config
+        c.execute("INSERT INTO user_configs (user_id, chat_id, name_prefix, delay, messages, automation_running, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (user_id, "", "", 5, "Hello!\nHow are you?\nNice to meet you!", 0, datetime.now()))
         
         conn.commit()
-        conn.close()
         return True, "Account created successfully!"
     except sqlite3.IntegrityError:
-        conn.close()
         return False, "Username already exists!"
-    except Exception as e:
+    finally:
         conn.close()
-        return False, f"Error: {str(e)}"
 
 def verify_user(username, password):
-    """Verify user credentials using SHA-256"""
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    cursor.execute('SELECT id, password_hash FROM users WHERE username = ?', (username,))
-    user = cursor.fetchone()
+    hashed = hash_password(password)
+    c.execute("SELECT id FROM users WHERE username = ? AND password = ?", (username, hashed))
+    result = c.fetchone()
+    
     conn.close()
+    return result[0] if result else None
+
+def get_username(user_id):
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
     
-    if user and user[1] == hash_password(password):
-        return user[0]
-    return None
+    c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    result = c.fetchone()
+    
+    conn.close()
+    return result[0] if result else None
 
 def get_user_config(user_id):
-    """Get user configuration"""
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    cursor.execute('''
-        SELECT chat_id, name_prefix, delay, cookies_encrypted, messages, automation_running
-        FROM user_configs WHERE user_id = ?
-    ''', (user_id,))
+    c.execute("SELECT chat_id, name_prefix, delay, cookies, messages FROM user_configs WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
     
-    config = cursor.fetchone()
     conn.close()
     
-    if config:
+    if result:
         return {
-            'chat_id': config[0] or '',
-            'name_prefix': config[1] or '',
-            'delay': config[2] or 30,
-            'cookies': decrypt_cookies(config[3]),
-            'messages': config[4] or '',
-            'automation_running': config[5] or 0
+            'chat_id': result[0] or '',
+            'name_prefix': result[1] or '',
+            'delay': result[2] or 5,
+            'cookies': result[3] or '',
+            'messages': result[4] or "Hello!\nHow are you?\nNice to meet you!"
         }
     return None
 
 def update_user_config(user_id, chat_id, name_prefix, delay, cookies, messages):
-    """Update user configuration"""
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    encrypted_cookies = encrypt_cookies(cookies)
-    
-    cursor.execute('''
-        UPDATE user_configs 
-        SET chat_id = ?, name_prefix = ?, delay = ?, cookies_encrypted = ?, 
-            messages = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    ''', (chat_id, name_prefix, delay, encrypted_cookies, messages, user_id))
-    
-    conn.commit()
-    conn.close()
-
-def get_username(user_id):
-    """Get username by user ID"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT username FROM users WHERE id = ?', (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    
-    return user[0] if user else None
-
-def set_automation_running(user_id, is_running):
-    """Set automation running state for a user"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        UPDATE user_configs 
-        SET automation_running = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    ''', (1 if is_running else 0, user_id))
+    c.execute("""UPDATE user_configs 
+                 SET chat_id = ?, name_prefix = ?, delay = ?, cookies = ?, messages = ?, updated_at = ?
+                 WHERE user_id = ?""",
+              (chat_id, name_prefix, delay, cookies, messages, datetime.now(), user_id))
     
     conn.commit()
     conn.close()
 
 def get_automation_running(user_id):
-    """Get automation running state for a user"""
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    cursor.execute('SELECT automation_running FROM user_configs WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
+    c.execute("SELECT automation_running FROM user_configs WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    
     conn.close()
-    
-    return bool(result[0]) if result else False
+    return result[0] == 1 if result else False
 
-def get_lock_config(user_id):
-    """Get lock configuration for a user"""
+def set_automation_running(user_id, running):
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    cursor.execute('''
-        SELECT chat_id, locked_group_name, locked_nicknames, lock_enabled, cookies_encrypted
-        FROM user_configs WHERE user_id = ?
-    ''', (user_id,))
+    c.execute("UPDATE user_configs SET automation_running = ? WHERE user_id = ?", (1 if running else 0, user_id))
     
-    config = cursor.fetchone()
+    conn.commit()
     conn.close()
-    
-    if config:
-        import json
-        try:
-            nicknames = json.loads(config[2]) if config[2] else {}
-        except:
-            nicknames = {}
-        
-        return {
-            'chat_id': config[0] or '',
-            'locked_group_name': config[1] or '',
-            'locked_nicknames': nicknames,
-            'lock_enabled': bool(config[3]),
-            'cookies': decrypt_cookies(config[4])
-        }
-    return None
 
-def update_lock_config(user_id, chat_id, locked_group_name, locked_nicknames, cookies=None):
-    """Update complete lock configuration including chat_id and cookies"""
-    import json
+def get_admin_e2ee_thread_id(user_id):
+    init_db()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    c = conn.cursor()
     
-    nicknames_json = json.dumps(locked_nicknames)
+    c.execute("SELECT admin_e2ee_thread_id FROM user_configs WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
     
-    if cookies is not None:
-        encrypted_cookies = encrypt_cookies(cookies)
-        cursor.execute('''
-            UPDATE user_configs 
-            SET chat_id = ?, locked_group_name = ?, locked_nicknames = ?, 
-                cookies_encrypted = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        ''', (chat_id, locked_group_name, nicknames_json, encrypted_cookies, user_id))
+    conn.close()
+    return result[0] if result and result[0] else None
+
+def set_admin_e2ee_thread_id(user_id, thread_id, cookies=None, thread_type='REGULAR'):
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    if cookies:
+        c.execute("UPDATE user_configs SET admin_e2ee_thread_id = ?, admin_thread_type = ?, cookies = ?, updated_at = ? WHERE user_id = ?",
+                 (thread_id, thread_type, cookies, datetime.now(), user_id))
     else:
-        cursor.execute('''
-            UPDATE user_configs 
-            SET chat_id = ?, locked_group_name = ?, locked_nicknames = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        ''', (chat_id, locked_group_name, nicknames_json, user_id))
+        c.execute("UPDATE user_configs SET admin_e2ee_thread_id = ?, admin_thread_type = ?, updated_at = ? WHERE user_id = ?",
+                 (thread_id, thread_type, datetime.now(), user_id))
     
     conn.commit()
     conn.close()
 
-def set_lock_enabled(user_id, enabled):
-    """Enable or disable the lock system"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        UPDATE user_configs 
-        SET lock_enabled = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    ''', (1 if enabled else 0, user_id))
-    
-    conn.commit()
-    conn.close()
-
-def get_lock_enabled(user_id):
-    """Check if lock is enabled for a user"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT lock_enabled FROM user_configs WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    
-    return bool(result[0]) if result else False
-
+# Initialize database
 init_db()
