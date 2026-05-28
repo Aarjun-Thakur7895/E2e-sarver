@@ -1,13 +1,10 @@
 services:
   - type: web
-    name: arjun-thakur
-    runtime: docker
-    repo: https://github.com/your-username/your-repo # Yahan apna actual GitHub repo URL daalein
+    name: ashiq-raj-automation
+    runtime: image
+    repo: https://github.com/yourusername/your-repo
     plan: free
-    dockerfilePath: Dockerfile
+    dockerfilePath: ./Dockerfile
     envVars:
-      - key: STREAMLIT_SERVER_PORT
-        value: 8501
-      - key: STREAMLIT_SERVER_ADDRESS
-        value: 0.0.0.0
-
+      - key: PYTHON_VERSION
+        value: 3.11.8
