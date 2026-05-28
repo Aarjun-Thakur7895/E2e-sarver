@@ -1,10 +1,5 @@
-streamlit==1.28.1
+streamlit==1.29.0
 selenium==4.15.0
-webdriver-manager==4.0.1
-chromedriver-py==116.0.5845.140
-ws3-fca@git+https://github.com/lyfee/ws3-fca.git
-facebook-chat-api@git+https://github.com/Schmavery/facebook-chat-api.git
 requests==2.31.0
-beautifulsoup4==4.12.2
-lxml==4.9.3
-cryptography==41.0.7
+python-dotenv==1.0.0
+sqlite3
